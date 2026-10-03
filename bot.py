@@ -3,21 +3,16 @@ import json
 import logging
 import os
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    Message, 
-    InlineKeyboardMarkup, 
-    InlineKeyboardButton, 
-    CallbackQuery
-)
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 
 BOT_TOKEN = "8788865475:AAHib17QlQuMs9nJkSmvwr-Ea2LB1ysQwWc"
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
 STAFF_FILE = "staff.json"
 
@@ -57,9 +52,9 @@ class CalcStates(StatesGroup):
     waiting_for_cash = State()
     asking_waiter_card = State()
 
-@dp.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
+@dp.message_handler(commands=['start'], state="*")
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.finish()
     await message.answer(
         "👋 Привет! Я бот для быстрого расчёта «кружки» чаевых.\n\n"
         "📌 **Команды:**\n"
@@ -67,18 +62,18 @@ async def cmd_start(message: Message, state: FSMContext):
         "• /staff — Посмотреть или изменить список персонала"
     )
 
-@dp.message(Command("staff"))
-async def cmd_staff(message: Message, state: FSMContext):
+@dp.message_handler(commands=['staff'], state="*")
+async def cmd_staff(message: types.Message, state: FSMContext):
     staff_list = load_staff()
     names_str = "\n• ".join(staff_list) if staff_list else "Список пуст"
     await message.answer(
         f"📋 **Закреплённый список персонала ({len(staff_list)} чел.):**\n• {names_str}\n\n"
         "Чтобы заменить список, отправьте новые ФИО через запятую или с новой строки."
     )
-    await state.set_state(StaffStates.waiting_for_names)
+    await StaffStates.waiting_for_names.set()
 
-@dp.message(StaffStates.waiting_for_names)
-async def process_new_staff(message: Message, state: FSMContext):
+@dp.message_handler(state=StaffStates.waiting_for_names)
+async def process_new_staff(message: types.Message, state: FSMContext):
     raw_input = message.text.replace('\n', ',')
     names = [name.strip() for name in raw_input.split(',') if name.strip()]
     
@@ -88,18 +83,19 @@ async def process_new_staff(message: Message, state: FSMContext):
 
     save_staff(names)
     await message.answer(f"✅ Новый список персонала сохранён ({len(names)} чел.)!\n• " + "\n• ".join(names))
-    await state.clear()
+    await state.finish()
 
 def get_waiter_action_keyboard():
-    buttons = [
-        [InlineKeyboardButton(text="0 грн (без безнала)", callback_data="card_0")],
-        [InlineKeyboardButton(text="❌ Не работал(а) сегодня", callback_data="card_absent")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        types.InlineKeyboardButton(text="0 грн (без безнала)", callback_data="card_0"),
+        types.InlineKeyboardButton(text="❌ Не работал(а) сегодня", callback_data="card_absent")
+    )
+    return keyboard
 
-@dp.message(Command("calc"))
-async def start_calc(message: Message, state: FSMContext):
-    await state.clear()
+@dp.message_handler(commands=['calc'], state="*")
+async def start_calc(message: types.Message, state: FSMContext):
+    await state.finish()
     staff_list = load_staff()
     
     if not staff_list:
@@ -107,10 +103,10 @@ async def start_calc(message: Message, state: FSMContext):
         return
 
     await message.answer("💵 Введите общую сумму **наличных в кружке** (грн):")
-    await state.set_state(CalcStates.waiting_for_cash)
+    await CalcStates.waiting_for_cash.set()
 
-@dp.message(CalcStates.waiting_for_cash)
-async def process_cash(message: Message, state: FSMContext):
+@dp.message_handler(state=CalcStates.waiting_for_cash)
+async def process_cash(message: types.Message, state: FSMContext):
     try:
         cash = float(message.text.replace(',', '.'))
         if cash < 0:
@@ -124,7 +120,7 @@ async def process_cash(message: Message, state: FSMContext):
         cash=cash, 
         staff_list=staff_list, 
         current_index=0, 
-        active_waiters={}, 
+        active_waiters={} 
     )
 
     first_waiter = staff_list[0]
@@ -134,7 +130,7 @@ async def process_cash(message: Message, state: FSMContext):
         reply_markup=get_waiter_action_keyboard(),
         parse_mode="Markdown"
     )
-    await state.set_state(CalcStates.asking_waiter_card)
+    await CalcStates.asking_waiter_card.set()
 
 async def ask_next_waiter_or_finish(message_or_callback, state: FSMContext):
     data = await state.get_data()
@@ -151,7 +147,7 @@ async def ask_next_waiter_or_finish(message_or_callback, state: FSMContext):
         )
         markup = get_waiter_action_keyboard()
 
-        if isinstance(message_or_callback, CallbackQuery):
+        if isinstance(message_or_callback, types.CallbackQuery):
             await message_or_callback.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
         else:
             await message_or_callback.answer(text, reply_markup=markup, parse_mode="Markdown")
@@ -161,11 +157,11 @@ async def ask_next_waiter_or_finish(message_or_callback, state: FSMContext):
         
         if not active_waiters:
             text = "⚠️ Ни один сотрудник не работал сегодня. Расчёт отменён."
-            if isinstance(message_or_callback, CallbackQuery):
+            if isinstance(message_or_callback, types.CallbackQuery):
                 await message_or_callback.message.edit_text(text)
             else:
                 await message_or_callback.answer(text)
-            await state.clear()
+            await state.finish()
             return
 
         total_card = sum(active_waiters.values())
@@ -195,15 +191,15 @@ async def ask_next_waiter_or_finish(message_or_callback, state: FSMContext):
         response_lines.append("\nДля нового расчёта нажмите /calc")
         final_text = "\n".join(response_lines)
 
-        if isinstance(message_or_callback, CallbackQuery):
+        if isinstance(message_or_callback, types.CallbackQuery):
             await message_or_callback.message.edit_text(final_text, parse_mode="Markdown")
         else:
             await message_or_callback.answer(final_text, parse_mode="Markdown")
 
-        await state.clear()
+        await state.finish()
 
-@dp.message(CalcStates.asking_waiter_card)
-async def process_card_text(message: Message, state: FSMContext):
+@dp.message_handler(state=CalcStates.asking_waiter_card)
+async def process_card_text(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(',', '.'))
         if amount < 0:
@@ -220,8 +216,8 @@ async def process_card_text(message: Message, state: FSMContext):
     await state.update_data(active_waiters=active_waiters)
     await ask_next_waiter_or_finish(message, state)
 
-@dp.callback_query(CalcStates.asking_waiter_card, F.data.in_({"card_0", "card_absent"}))
-async def process_card_button(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data in ["card_0", "card_absent"], state=CalcStates.asking_waiter_card)
+async def process_card_button(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     current_waiter = data["staff_list"][data["current_index"]]
     active_waiters = data["active_waiters"]
@@ -236,9 +232,7 @@ async def process_card_button(callback: CallbackQuery, state: FSMContext):
 async def handle(request):
     return web.Response(text="Bot is running!")
 
-async def main():
-    logging.basicConfig(level=logging.INFO)
-    
+async def on_startup(dp):
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -247,8 +241,7 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-    await dp.start_polling(bot)
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO)
+    executor.start_polling(dp, on_startup=on_startup)
     

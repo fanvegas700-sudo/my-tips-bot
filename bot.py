@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -13,7 +14,6 @@ from aiogram.types import (
     CallbackQuery
 )
 
-# Токен подтягивается автоматически из настроек Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=BOT_TOKEN)
@@ -233,10 +233,24 @@ async def process_card_button(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await ask_next_waiter_or_finish(callback, state)
 
+# Заглушка для проверки порта Render
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
     logging.basicConfig(level=logging.INFO)
+    
+    # Запуск мини-сервера для Render
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+    # Запуск бота Telegram
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-      

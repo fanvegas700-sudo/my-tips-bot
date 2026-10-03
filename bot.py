@@ -14,7 +14,7 @@ from aiogram.types import (
     CallbackQuery
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8788865475:AAHib17QlQuMs9nJkSmvwr-Ea2LB1ysQwWc"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -233,14 +233,12 @@ async def process_card_button(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await ask_next_waiter_or_finish(callback, state)
 
-# Заглушка для проверки порта Render
 async def handle(request):
     return web.Response(text="Bot is running!")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
     
-    # Запуск мини-сервера для Render
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -249,8 +247,8 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
-    # Запуск бота Telegram
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
